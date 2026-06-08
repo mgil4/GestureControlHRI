@@ -1,0 +1,13 @@
+hand_gesture_recognition:
+  ros__parameters:
+    image_topic: "/camera/camera/color/image_raw"
+    model_path: "gesture_classifier.pkl"
+    landmarker_model: "hand_landmarker.task"
+    min_confidence: 0.60
+    num_hands: 2
+    detection_confidence: 0.50
+    tracking_confidence: 0.50
+    voting_window_sec: 0.75
+    publish_rate_hz: 10.0
+    required_stability: 4
+

@@ -1,0 +1,6 @@
+mediapipe
+scikit-learn
+opencv-python
+numpy
+ollama
+gtts

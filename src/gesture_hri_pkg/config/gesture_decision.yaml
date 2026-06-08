@@ -1,0 +1,19 @@
+gesture_decision:
+  ros__parameters:
+    mode: "robot"
+    debounce_frames: 8
+    cooldown_sec: 1.5
+    idle_timeout_sec: 2.0
+    publish_every_frame: false
+    min_confidence: 0.60
+    start_gesture: "5"
+    space_gesture: "3"
+    end_gesture: "7"
+    delete_gesture: "8"
+    gesture_labels:    ["0","a","s","m","n","o","e","t","1","d","2","u","v","3","4","b","5","6","w","9","f"]
+    gesture_actions:  ["STOP","STOP","STOP","STOP","STOP","STOP","STOP","STOP","MOVE_FORWARD","MOVE_FORWARD","MOVE_BACK","MOVE_BACK","MOVE_BACK","TURN_LEFT","TURN_RIGHT","TURN_RIGHT","LOOK_DOWN","LOOK_UP","LOOK_UP","HOME_POSE","HOME_POSE"]
+    gesture_priority: [true,true,true,true,true,true,true,true,false,false,false,false,false,false,false,false,false,false,false,false,false]
+    combo_labels:     ["1+2","3+4","0+5"]
+    combo_actions:    ["MOVE_FORWARD_FAST","SPIN","EMERGENCY_STOP"]
+    combo_priority:   [false,false,true]
+

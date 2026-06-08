@@ -1,0 +1,15 @@
+robot_controller:
+  ros__parameters:
+    mode: "robot"
+    linear_speed: 0.3
+    angular_speed: 0.5
+    fast_multiplier: 1.8
+    cmd_vel_duration: 1.5
+    cmd_vel_rate_hz: 10.0
+    head_pan_default: 0.0
+    head_tilt_up: -0.4
+    head_tilt_down: 0.4
+    head_move_duration: 1.0
+    tts_backend: "pal"
+    llm_response_timeout: 15.0
+
