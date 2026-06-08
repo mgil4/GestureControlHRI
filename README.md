@@ -18,12 +18,6 @@ ollama pull qwen3:0.6b
 
 ## Model files
 
-Place these in `src/gesture_hri_pkg/models/` before building:
-- `gesture_classifier.pkl`
-- `hand_landmarker.task`
-
-`hand_landmarker.task` can be downloaded from the MediaPipe releases page.
-`gesture_classifier.pkl` is the trained ASL classifier (distribute separately).
 
 ## Build
 
