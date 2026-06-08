@@ -95,6 +95,7 @@ class GestureDecisionNode(Node):
         self._last_fire_time   : float      = 0.0
         self._last_hand_time   : float      = time.time()
         self._idle_sent        : bool       = False
+        self._waiting_for_release : bool    = False
 
         # Mode 2A/2B  –  text buffer state
         self._text_buffer      : list[str]  = []   # accumulated characters
@@ -146,7 +147,7 @@ class GestureDecisionNode(Node):
         self.declare_parameter("space_gesture",       "SPACE")
         self.declare_parameter("end_gesture",         "END")
         self.declare_parameter("delete_gesture",      "DELETE")
-   	# Robot gesture map (flat parallel lists)
+        # Robot gesture map (flat parallel lists)
         self.declare_parameter("gesture_labels",   ["0","1","2","3","4","5","6","7","8","9"])
         self.declare_parameter("gesture_actions",  ["STOP","MOVE_FORWARD","MOVE_BACK","TURN_LEFT",
                                                 "TURN_RIGHT","WAVE","COME_HERE","LOOK_UP",
@@ -334,6 +335,7 @@ class GestureDecisionNode(Node):
         if not has_gesture:
             self._candidate_label  = None
             self._candidate_frames = 0
+            self._waiting_for_release = False 
             self._maybe_publish_idle()
             return
 
@@ -351,6 +353,17 @@ class GestureDecisionNode(Node):
             self._candidate_frames = 0
             return
 
+        # If we fired and are waiting for a different label, block everything 
+        if self._waiting_for_release:
+            if label == self._candidate_label:
+                # Same label still held — stay locked out
+                return
+            else:
+                # Label changed — user moved to a new sign, release complete
+                self._waiting_for_release = False
+                self._candidate_frames    = 0
+                # Fall through and start counting the new label immediately
+
         # Debounce accumulation
         if label == self._candidate_label:
             self._candidate_frames += 1
@@ -361,7 +374,7 @@ class GestureDecisionNode(Node):
         # Publish buffer state on verbose topic every frame (live display)
         self._publish_buffer_state(label, confidence)
 
-        if self._candidate_frames != self._debounce_frames:
+        if self._candidate_frames < self._debounce_frames:
             # Not yet confirmed: keep accumulating
             return
 
@@ -369,6 +382,7 @@ class GestureDecisionNode(Node):
         # Reset counter so the same gesture must be released and re-held
         # before it can fire again.  This is intentional: in sign language
         # holding a letter should not keep inserting it.
+        self._waiting_for_release = True   # lock until label changes
         self._candidate_frames = 0
 
         if label == self._start_gesture:
