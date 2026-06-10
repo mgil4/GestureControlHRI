@@ -1,6 +1,6 @@
 hand_gesture_recognition:
   ros__parameters:
-    image_topic: "/camera/camera/color/image_raw"
+    image_topic: "/head_front_camera/color/image_raw"
     model_path: "gesture_classifier.pkl"
     landmarker_model: "hand_landmarker.task"
     min_confidence: 0.60

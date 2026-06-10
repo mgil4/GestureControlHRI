@@ -53,6 +53,8 @@ import rclpy
 from rclpy.node import Node
 #from rclpy.parameter import Parameter
 #from rcl_interfaces.msg import ParameterDescriptor, FloatingPointRange, IntegerRange
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
@@ -149,11 +151,17 @@ class HandGestureRecognitionNode(Node):
 
         self._pub = self.create_publisher(String, '/gesture/result', 10)
 
+        qos = QoSProfile(
+        reliability=ReliabilityPolicy.BEST_EFFORT, # or BEST_EFFORT (try both)
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10
+        )
+        
         self._image_sub = self.create_subscription(
             Image,
             self.image_topic,
             self._image_callback,
-            10,
+            qos_profile=qos_profile_sensor_data,
         )
 
         # Timer drives the publish cycle independently of camera FPS
@@ -171,7 +179,7 @@ class HandGestureRecognitionNode(Node):
 
     # Parameter declaration
     def _declare_params(self):
-        self.declare_parameter('image_topic', '/camera/camera/color/image_raw')
+        self.declare_parameter('image_topic', '/head_front_camera/color/image_raw')
         self.declare_parameter('model_path', 'gesture_classifier.pkl')
         self.declare_parameter('landmarker_model', 'hand_landmarker.task')
         self.declare_parameter('min_confidence', 0.60)
@@ -188,7 +196,7 @@ class HandGestureRecognitionNode(Node):
         package_path = get_package_share_directory('gesture_hri_pkg')
 
         # build correct absolute path
-        path = os.path.join(package_path, '..', '..', 'models', self.model_path)
+        path = os.path.join(package_path, 'models', self.model_path)
         path = os.path.abspath(path)
 
         self.get_logger().info(f'\n\nLoading classifier from: {path}\n')
@@ -208,7 +216,7 @@ class HandGestureRecognitionNode(Node):
         package_path = get_package_share_directory('gesture_hri_pkg')
 
         # build correct absolute path
-        lm_path = os.path.join(package_path, '..', '..', 'models', self.landmarker_model)
+        lm_path = os.path.join(package_path, 'models', self.landmarker_model)
         lm_path = os.path.abspath(lm_path)
 
         self.get_logger().info(f'\n\nLoading landmarker from: {lm_path}\n')

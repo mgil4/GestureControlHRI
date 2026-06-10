@@ -169,6 +169,7 @@ class RobotControllerNode(Node):
             )
         # Thread lock so concurrent cmd_vel bursts don't overlap
         self._motion_lock = threading.Lock()
+        self._twist_cancel = threading.Event()
 
     # MODE 2A / 2B: Text / LLM setup
     def _setup_text_mode(self):
@@ -212,6 +213,7 @@ class RobotControllerNode(Node):
     def _action_callback(self, msg: String):
         try:
             data = json.loads(msg.data)
+            self.get_logger().info(f"RAW action received: {msg.data}")
         except json.JSONDecodeError as e:
             self.get_logger().error(f"Bad JSON on /gesture/action: {e}")
             return
@@ -263,6 +265,7 @@ class RobotControllerNode(Node):
 
         # Twist burst (runs in background thread)
         if twist_scale is not None and twist_scale != (0.0, 0.0, 0.0):
+            self._twist_cancel.set()
             lx, ly, az = twist_scale
             lin = self._linear_speed  * (self._fast_multiplier if is_fast else 1.0)
             ang = self._angular_speed * (self._fast_multiplier if is_fast else 1.0)
@@ -287,15 +290,14 @@ class RobotControllerNode(Node):
         self._cmd_vel_pub.publish(Twist())
         self.get_logger().info("[ROBOT] Base stopped")
 
-    def _publish_twist_burst(
-        self, lx: float, ly: float, az: float, duration: float
-    ):
+    def _publish_twist_burst(self, lx: float, ly: float, az: float, duration: float):
         """
         Publishes a Twist at cmd_vel_rate_hz for `duration` seconds,
         then sends a zero-velocity stop.
         Runs in its own thread so it does not block the ROS executor.
         """
         with self._motion_lock:
+            self._twist_cancel.clear()
             twist = Twist()
             twist.linear.x  = lx
             twist.linear.y  = ly
@@ -305,6 +307,8 @@ class RobotControllerNode(Node):
             steps    = int(duration / rate_sec)
 
             for _ in range(steps):
+                if self._twist_cancel.is_set():
+                    break
                 self._cmd_vel_pub.publish(twist)
                 time.sleep(rate_sec)
 
@@ -400,7 +404,6 @@ class RobotControllerNode(Node):
         goal.input  = text
         goal.locale = "en_US"
 
-        self.get_logger().info(f"[TTS/PAL] -> '{text}'")
         future = self._say_client.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, future, timeout_sec=30.0)
         try:

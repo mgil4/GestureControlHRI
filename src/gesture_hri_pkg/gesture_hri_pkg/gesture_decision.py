@@ -107,8 +107,8 @@ class GestureDecisionNode(Node):
         self._buffer_conf_sum  : float      = 0.0  # for mean confidence
         self._buffer_conf_n    : int        = 0
         
-        #
-        self._llm_busy
+        self._llm_busy = False
+        self._llm_reply_sub = self.create_subscription(String, "/llm/response", self._llm_reply_callback, 10)
 
         # QoS
         qos = QoSProfile(
@@ -145,7 +145,7 @@ class GestureDecisionNode(Node):
     # Parameter helpers
     def _declare_params(self):
         self.declare_parameter("mode",                "robot")
-        self.declare_parameter("debounce_frames",     8)
+        self.declare_parameter("debounce_frames",     3)
         self.declare_parameter("cooldown_sec",        1.5)
         self.declare_parameter("idle_timeout_sec",    2.0)
         self.declare_parameter("publish_every_frame", False)
@@ -201,6 +201,10 @@ class GestureDecisionNode(Node):
                 f"Invalid mode '{self._mode}'. Must be one of {self.VALID_MODES}"
             )
             raise ValueError(f"Invalid mode: {self._mode}")
+            
+    def _llm_reply_callback(self, msg: String):
+        self._llm_busy = False
+        self.get_logger().info("LLM reply received, gesture input re-enabled.")
 
     # In robot mode: alphabetic aliases ("b" is treated as "4")
     _ROBOT_ALIASES: dict[str, str] = {
@@ -250,7 +254,7 @@ class GestureDecisionNode(Node):
             # Also remap in hands list so verbose output is consistent
             for h in hands:
                 h["label"] = _TEXT_ALIASES.get(h["label"], h["label"])
-	
+
         # Normalize hands with aliases
         if self._mode == "robot":
             for h in hands:
@@ -317,8 +321,8 @@ class GestureDecisionNode(Node):
         #        }
 
         # Verbose publish
-        #verbose = self._build_robot_payload(resolved, mode="robot")
-        #self._maybe_publish_verbose(verbose)
+        verbose = self._build_robot_payload(resolved, mode="robot")
+        self._maybe_publish_verbose(verbose)
 
         # Debounce / cooldown / fire
         action_payload = None
@@ -334,7 +338,7 @@ class GestureDecisionNode(Node):
 
             if priority:
                 # Fires immediately regardless of debounce or cooldown
-                #action_payload         = verbose
+                action_payload         = verbose
                 self._candidate_label  = None
                 self._candidate_frames = 0
                 self._active_action    = action
@@ -353,15 +357,16 @@ class GestureDecisionNode(Node):
                     new_action = action != self._active_action
 
                     if cool_ok or new_action:
-                        #action_payload       = verbose
+                        action_payload       = verbose
                         self._active_action  = action
                         self._last_fire_time = now
 
         # Publish confirmed action
         if action_payload is not None:
             self._publish_action(action_payload)
-        #elif self._publish_every_frame:
-            #self._publish_action(verbose)
+            #self._llm_busy = True
+        elif self._publish_every_frame:
+            self._publish_action(verbose)
 
     # MODE 2A / 2B: Text / LLM (sentence building)
     def _handle_text_mode(self, label: str, confidence: float, has_gesture: bool, num_hands: int = 1, hands: list | None = None,):
@@ -374,7 +379,10 @@ class GestureDecisionNode(Node):
         """
         if hands is None:
             hands = []
-
+        
+        if self._llm_busy:
+            return
+            
         if not has_gesture:
             self._candidate_label     = None
             self._candidate_frames    = 0
@@ -478,6 +486,7 @@ class GestureDecisionNode(Node):
                     "confidence": round(avg_conf, 4),
                 }
                 self._publish_action(payload)
+                self._llm_busy = True
                 self.get_logger().info(
                     "\n                                                  TEXT SENT.\n"
                 )

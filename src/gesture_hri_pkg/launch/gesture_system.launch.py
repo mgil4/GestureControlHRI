@@ -101,7 +101,7 @@ def generate_launch_description():
        ),
        DeclareLaunchArgument(
            "image_topic",
-           default_value="/camera/camera/color/image_raw"
+           default_value="/head_front_camera/color/image_raw"
        ),
        DeclareLaunchArgument(
            "pkg",
