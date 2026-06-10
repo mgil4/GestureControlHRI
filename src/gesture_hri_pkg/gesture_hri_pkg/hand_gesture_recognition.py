@@ -266,7 +266,7 @@ class HandGestureRecognitionNode(Node):
                 best_idx = int(np.argmax(proba))
                 label    = str(self._label_encoder.classes_[best_idx])
                 conf     = float(proba[best_idx])
-                self.get_logger().info(f"Prediction: {label} ({conf:.2f})")
+                self.get_logger().debug(f"Prediction: {label} ({conf:.2f})")
 
                 if label == self._last_label:
                     self._stable_count += 1

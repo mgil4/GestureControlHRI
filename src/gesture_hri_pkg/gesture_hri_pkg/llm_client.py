@@ -96,7 +96,7 @@ class LLMClientNode(Node):
        query = msg.data.strip()
        if not query:
            return
-       self.get_logger().info(f"[LLM] Query received: '{query}'")
+       self.get_logger().info(f"\n                                                         [LLM] QUERY RECEIVED: '{query}'\n")
        # Run in background so the ROS executor is not blocked
        threading.Thread(target=self._process_query, args=(query,), daemon=True).start()
  
@@ -113,7 +113,7 @@ class LLMClientNode(Node):
                    self._history.append({"role": "user",      "content": query})
                    self._history.append({"role": "assistant",  "content": response_text})
  
-               self.get_logger().info(f"[LLM] Response ({elapsed:.1f}s): '{response_text}'")
+               self.get_logger().info(f"\n                                                         [LLM] RESPONSE ({elapsed:.1f}s): '{response_text}'")
                self._publish_response(response_text)
                self._publish_status("ready", f"Done in {elapsed:.1f}s")
  

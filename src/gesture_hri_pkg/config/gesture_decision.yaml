@@ -10,10 +10,11 @@ gesture_decision:
     space_gesture: "3"
     end_gesture: "7"
     delete_gesture: "8"
-    gesture_labels:    ["0","a","s","m","n","o","e","t","1","d","2","u","v","3","4","b","5","6","w","9","f"]
-    gesture_actions:  ["STOP","STOP","STOP","STOP","STOP","STOP","STOP","STOP","MOVE_FORWARD","MOVE_FORWARD","MOVE_BACK","MOVE_BACK","MOVE_BACK","TURN_LEFT","TURN_RIGHT","TURN_RIGHT","LOOK_DOWN","LOOK_UP","LOOK_UP","HOME_POSE","HOME_POSE"]
-    gesture_priority: [true,true,true,true,true,true,true,true,false,false,false,false,false,false,false,false,false,false,false,false,false]
-    combo_labels:     ["1+2","3+4","0+5"]
-    combo_actions:    ["MOVE_FORWARD_FAST","SPIN","EMERGENCY_STOP"]
-    combo_priority:   [false,false,true]
+    commit_gesture: "5"
+    gesture_labels:    ["0","a","s","m","n","o","e","t"]
+    gesture_actions:  ["STOP","STOP","STOP","STOP","STOP","STOP","STOP","STOP"]
+    gesture_priority: [true,true,true,true,true,true,true,true]
+    combo_labels:     ["5+1","5+d","5+2","5+v","5+u","5+3","5+4","5+b","3+1","3+d","3+2","3+v","3+u"]
+    combo_actions:    ["MOVE_FORWARD","MOVE_FORWARD","MOVE_BACK","MOVE_BACK","MOVE_BACK","TURN_LEFT","TURN_RIGHT","TURN_RIGHT","LOOK_UP","LOOK_UP","LOOK_DOWN","LOOK_DOWN","LOOK_DOWN"]
+    combo_priority:   [false,false,false,false,false,false,false,false,false,false,false,false,false]
 

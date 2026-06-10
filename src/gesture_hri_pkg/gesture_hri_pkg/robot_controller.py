@@ -49,7 +49,7 @@ except ImportError:
     _HAS_PAL_TTS = False
 
 
-# Optional play_motion2 action
+# play_motion2 action
 try:
     from play_motion2_msgs.action import PlayMotion2
     _HAS_PLAY_MOTION = True
@@ -173,12 +173,15 @@ class RobotControllerNode(Node):
     # MODE 2A / 2B: Text / LLM setup
     def _setup_text_mode(self):
         self._active_tts = self._resolve_tts_backend()
+        self.get_logger().info(f"[TTS] Backend resolved: {self._active_tts}")
 
         # PAL TTS action client
         if _HAS_PAL_TTS and self._active_tts == "pal":
             self._say_client = ActionClient(self, TTSAction, "/tts_engine/tts")
+            self.get_logger().info("[TTS] PAL action client created -> /tts_engine/tts")
         else:
             self._say_client = None
+            self.get_logger().error("[TTS] PAL TTS unavailable. Install tts_msgs or check your ROS environment.")
 
     def _setup_llm_mode(self):
         # Publisher to send text to llm_client.py
@@ -233,7 +236,7 @@ class RobotControllerNode(Node):
         elif mode == "llm" and action == "LLM_QUERY":
             text = data.get("text", "").strip()
             if text:
-                self.get_logger().info(f"[LLM] Query: '{text}'")
+                #self.get_logger().info(f"[LLM] Query: '{text}'")
                 threading.Thread(
                     target=self._handle_llm_query, args=(text,), daemon=True
                 ).start()
@@ -252,7 +255,7 @@ class RobotControllerNode(Node):
         is_fast     = spec.get("fast",  False)
         is_spin     = spec.get("spin",  False)
 
-        self.get_logger().info(f"[ROBOT] Executing action: {action}")
+        self.get_logger().info(f"\n                                                  [ROBOT] Executing action:      {action}\n")
 
         # Immediate zero velocity for STOP / EMERGENCY
         if twist_scale == (0.0, 0.0, 0.0):
@@ -373,75 +376,40 @@ class RobotControllerNode(Node):
 
     # TTS (shared by mode 2A and 2B)
     def _speak(self, text: str):
-        """Dispatch to the configured TTS backend."""
         if self._active_tts == "pal":
             self._speak_pal(text)
         else:
-            self._speak_gtts(text)
+            self.get_logger().error( "[TTS] No TTS available: active_tts is not 'pal'" ) 
 
     def _speak_pal(self, text: str):
+        """Send text to the PAL TTS action server (/tts_engine/tts)."""
         if self._say_client is None or not _HAS_PAL_TTS:
-            self.get_logger().warn("[TTS] PAL client not initialised — falling back to gtts")
-            self._speak_gtts(text)
+            self.get_logger().error(
+            "[TTS] PAL client not initialised — tts_msgs not installed or "
+            "_setup_text_mode was not called"
+            )
             return
 
         if not self._say_client.wait_for_server(timeout_sec=3.0):
-            self.get_logger().warn("[TTS] /tts_engine/tts not available — falling back to gtts")
-            self._speak_gtts(text)
+            self.get_logger().error(
+            "[TTS] /tts_engine/tts action server not available after 3s"
+            )
             return
 
-        goal = TTSAction.Goal()
+        goal        = TTSAction.Goal()
         goal.input  = text
-        goal.locale = "en_US"   # English
+        goal.locale = "en_US"
 
-        self.get_logger().info(f"[TTS/PAL] → '{text}'")
+        self.get_logger().info(f"[TTS/PAL] -> '{text}'")
         future = self._say_client.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, future, timeout_sec=30.0)
         try:
-            handle = future.result()
+            handle        = future.result()
             result_future = handle.get_result_async()
             rclpy.spin_until_future_complete(self, result_future, timeout_sec=30.0)
             self.get_logger().info("[TTS/PAL] speech completed")
         except Exception as e:
             self.get_logger().error(f"[TTS/PAL] error: {e}")
-
-    def _speak_gtts(self, text: str):
-        """
-        Offline TTS fallback using gTTS (Google Text-to-Speech) + pygame.
-        Install:  pip install gtts pygame
-        This synthesises to a temporary MP3 file and plays it through the
-        system audio device (or TIAGo's speakers if the audio is routed).
-        """
-        try:
-            import tempfile, os
-            from gtts import gTTS
-            import pygame
-
-            self.get_logger().info(f"[TTS/gTTS] → '{text}'")
-
-            tts = gTTS(text=text, lang="en", slow=False)
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-                tmp_path = f.name
-            tts.save(tmp_path)
-
-            pygame.mixer.init()
-            pygame.mixer.music.load(tmp_path)
-            pygame.mixer.music.play()
-            while pygame.mixer.music.get_busy():
-                time.sleep(0.1)
-            pygame.mixer.quit()
-
-            os.unlink(tmp_path)
-            self.get_logger().info("[TTS/gTTS] speech completed")
-
-        except ImportError:
-            self.get_logger().error(
-                "[TTS/gTTS] gtts or pygame not installed. "
-                "Run: pip install gtts pygame"
-            )
-        except Exception as e:
-            self.get_logger().error(f"[TTS/gTTS] error: {e}")
-
 
     # MODE 2B: LLM 
     def _handle_llm_query(self, text: str):
@@ -456,7 +424,7 @@ class RobotControllerNode(Node):
         msg      = String()
         msg.data = text
         self._llm_query_pub.publish(msg)
-        self.get_logger().info(f"[LLM] Query published: '{text}'")
+        #self.get_logger().info(f"[LLM] Query published: '{text}'")
 
         # Wait for response (with timeout)
         got_response = self._llm_event.wait(timeout=self._llm_timeout)
@@ -468,7 +436,7 @@ class RobotControllerNode(Node):
             self._speak("I did not receive a response. Please try again.")
             return
 
-        self.get_logger().info(f"[LLM] Response: '{self._llm_response}'")
+        #self.get_logger().info(f"[LLM] Response: '{self._llm_response}'")
         self._speak(self._llm_response)
 
     def _llm_response_callback(self, msg: String):
