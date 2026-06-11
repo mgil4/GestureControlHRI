@@ -96,7 +96,7 @@ class GestureDecisionNode(Node):
         self._last_hand_time   : float      = time.time()
         self._idle_sent        : bool       = False
         self._waiting_for_release : bool    = False
-        
+                
         # Letter predicted shown but not yet committed to buffer 
         self._pending_letter     : str | None = None
         self._pending_confidence : float      = 0.0
@@ -381,7 +381,8 @@ class GestureDecisionNode(Node):
             hands = []
         
         if self._llm_busy:
-            return
+            if time.time() - getattr(self, "_llm_query_time", 0) > 20:
+                self._llm_busy = False
             
         if not has_gesture:
             self._candidate_label     = None
@@ -487,6 +488,7 @@ class GestureDecisionNode(Node):
                 }
                 self._publish_action(payload)
                 self._llm_busy = True
+                self._llm_query_time = time.time()
                 self.get_logger().info(
                     "\n                                                  TEXT SENT.\n"
                 )
@@ -502,7 +504,7 @@ class GestureDecisionNode(Node):
             if not self._sentence_started:
                 self.get_logger().warn(
                     "\n                                                  "
-                    "START gesture needed. SHOW YOUR OPEN PALM.\n"
+                    "START gesture needed.\n"
                 )
                 return
 

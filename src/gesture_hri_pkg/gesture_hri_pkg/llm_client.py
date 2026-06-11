@@ -53,9 +53,9 @@ class LLMClientNode(Node):
        self._read_params()
  
        # Conversation history — ring buffer of {"role": ..., "content": ...} dicts
-       max_messages = self._history_turns * 2  # one user + one assistant per turn
-       self._history: deque = deque(maxlen=max_messages if max_messages > 0 else None)
-       self._history_enabled = self._history_turns > 0
+       #max_messages = self._history_turns * 2  # one user + one assistant per turn
+       #self._history: deque = deque(maxlen=max_messages if max_messages > 0 else None)
+       #self._history_enabled = self._history_turns > 0
  
        # ROS interfaces
        self._query_sub    = self.create_subscription(String, "/llm/query",    self._query_callback, 10)
@@ -79,7 +79,7 @@ class LLMClientNode(Node):
        self.declare_parameter("ollama_model",   "qwen3:0.6b")
        self.declare_parameter("max_tokens",     200)
        self.declare_parameter("temperature",    0.7)
-       self.declare_parameter("history_turns",  6)
+       #self.declare_parameter("history_turns",  6)
        self.declare_parameter("system_prompt",  _DEFAULT_SYSTEM_PROMPT)
  
    def _read_params(self):
@@ -87,13 +87,16 @@ class LLMClientNode(Node):
        self._ollama_model  = self.get_parameter("ollama_model").value
        self._max_tokens    = self.get_parameter("max_tokens").value
        self._temperature   = self.get_parameter("temperature").value
-       self._history_turns = self.get_parameter("history_turns").value
+       #self._history_turns = self.get_parameter("history_turns").value
        self._system_prompt = self.get_parameter("system_prompt").value
  
    def _query_callback(self, msg: String):
+       self._last_query = ""
        query = msg.data.strip()
-       if not query:
+       if not query or query==self._last_query:
            return
+       self._last_query = ""
+       
        self.get_logger().info(f"\n                                                         [LLM] QUERY RECEIVED: '{query}'\n")
        # Run in background so the ROS executor is not blocked
        threading.Thread(target=self._process_query, args=(query,), daemon=True).start()
@@ -107,9 +110,9 @@ class LLMClientNode(Node):
                response_text = self._call_ollama(messages)
                elapsed       = time.time() - t0
  
-               if self._history_enabled:
-                   self._history.append({"role": "user",      "content": query})
-                   self._history.append({"role": "assistant",  "content": response_text})
+               #if self._history_enabled:
+               #    self._history.append({"role": "user",      "content": query})
+               #    self._history.append({"role": "assistant",  "content": response_text})
  
                self.get_logger().info(f"\n                                                         [LLM] RESPONSE ({elapsed:.1f}s): '{response_text}'")
                self._publish_response(response_text)
@@ -124,10 +127,10 @@ class LLMClientNode(Node):
  
    def _build_messages(self, query: str) -> list[dict]:
        messages = [{"role": "system", "content": self._system_prompt}]
-       if self._history_enabled:
-           messages.extend(list(self._history))
-       messages.append({"role": "user", "content": query})
-       return messages
+       #if self._history_enabled:
+       #    messages.extend(list(self._history)) 
+       #messages.append({"role": "user", "content": query})
+       return [{"role": "system", "content": self._system_prompt},{"role": "user", "content": query},] 
  
    def _call_ollama(self, messages: list[dict]) -> str:
        try:

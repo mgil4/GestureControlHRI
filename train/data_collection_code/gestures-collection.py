@@ -25,8 +25,8 @@ from mediapipe import Image, ImageFormat
 
 # Config 
 CAMERA_INDEX   = 0
-OUTPUT_CSV     = "gesture_data.csv"
-SAMPLES_NEEDED = 1000      # samples to collect per gesture
+OUTPUT_CSV     = "gesture_data_luka.csv"
+SAMPLES_NEEDED = 20      # samples to collect per gesture
 COLLECT_DELAY  = 0.05     # seconds between auto-captures when holding SPACE
 
 LANDMARKER_MODEL = "hand_landmarker.task"

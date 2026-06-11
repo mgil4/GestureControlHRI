@@ -151,7 +151,7 @@ class RobotControllerNode(Node):
     def _setup_robot_mode(self):
         # cmd_vel publisher (base movement)
         self._cmd_vel_pub = self.create_publisher(
-            Twist, "/mobile_base_controller/cmd_vel_unstamped", 10
+            Twist, "/cmd_vel", 10
         )
         # head trajectory publisher
         self._head_pub = self.create_publisher(
