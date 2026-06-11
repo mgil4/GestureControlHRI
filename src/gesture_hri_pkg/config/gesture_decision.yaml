@@ -7,7 +7,7 @@ gesture_decision:
     publish_every_frame: false
     min_confidence: 0.60
     start_gesture: "3"
-    space_gesture: "6"
+    space_gesture: "5"
     end_gesture: "7"
     delete_gesture: "8"
     commit_gesture: "5"
