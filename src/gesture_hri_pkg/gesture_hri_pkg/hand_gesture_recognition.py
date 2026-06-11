@@ -136,6 +136,7 @@ class HandGestureRecognitionNode(Node):
         self.detect_conf         = self.get_parameter('detection_confidence').value
         self.track_conf          = self.get_parameter('tracking_confidence').value
         self.required_stability  = self.get_parameter('required_stability').value
+        self.show_preview        = self.get_parameter('show_preview').value
         
         # Load models
         self._load_classifier()
@@ -189,6 +190,7 @@ class HandGestureRecognitionNode(Node):
         self.declare_parameter('detection_confidence', 0.50)
         self.declare_parameter('tracking_confidence', 0.50)
         self.declare_parameter('required_stability', 4)
+        self.declare_parameter('show_preview', False)
         
     # Model loading
     def _load_classifier(self):
@@ -260,10 +262,12 @@ class HandGestureRecognitionNode(Node):
 
         now = time.time()
         self._latest_hands = []
+        
+        preview = frame.copy() if self.show_preview else None
 
         if result.hand_landmarks:
             for hand_idx, hand_lms in enumerate(result.hand_landmarks):
-                features, _ = normalize_landmarks(hand_lms, w, h)
+                features, pixel_coords = normalize_landmarks(hand_lms, w, h)
 
                 try:
                     proba = self._classifier.predict_proba([features])[0]
@@ -292,6 +296,51 @@ class HandGestureRecognitionNode(Node):
                 # Only feed into voting window if above threshold and stable for enough frames
                 if conf >= self.min_confidence and self._stable_count >= self.required_stability:
                     self._vote_window.append((label, conf, now))
+                
+                if self.show_preview and preview is not None:
+                    # Draw landmark dots
+                    for (px, py) in pixel_coords:
+                        cv2.circle(preview, (px, py), 4, (0, 255, 0), -1)
+
+                    # Draw connections between landmarks
+                    for (a, b) in HAND_CONNECTIONS:
+                        cv2.line(
+                            preview,
+                            pixel_coords[a],
+                            pixel_coords[b],
+                            (0, 200, 0), 1
+                        )
+
+                    # Label above the wrist (landmark 0)
+                    wrist_x, wrist_y = pixel_coords[0]
+                    text      = f"{label} ({conf:.2f})"
+                    org       = (max(wrist_x - 30, 0), max(wrist_y - 15, 0))
+                    fontscale = 1.0
+                    thickness = 2
+                    # Black outline for readability on any background
+                    cv2.putText(preview, text, org,
+                            cv2.FONT_HERSHEY_SIMPLEX, fontscale,
+                            (0, 0, 0), thickness + 2)
+                    cv2.putText(preview, text, org,
+                            cv2.FONT_HERSHEY_SIMPLEX, fontscale,
+                            (0, 255, 0), thickness)
+
+                    # Stability bar — shows how many stable frames accumulated
+                    bar_max   = self.required_stability
+                    bar_val   = min(self._stable_count, bar_max)
+                    bar_x     = max(wrist_x - 30, 0)
+                    bar_y     = wrist_y + 10
+                    bar_w     = 80
+                    bar_h     = 8
+                    filled    = int(bar_w * bar_val / bar_max)
+                    cv2.rectangle(preview,
+                            (bar_x, bar_y),
+                            (bar_x + bar_w, bar_y + bar_h),
+                            (50, 50, 50), -1)
+                    cv2.rectangle(preview,
+                            (bar_x, bar_y),
+                            (bar_x + filled, bar_y + bar_h),
+                            (0, 255, 100), -1)
 
         # Evict stale entries from the voting window
         cutoff = now - self.voting_window_sec
@@ -301,6 +350,31 @@ class HandGestureRecognitionNode(Node):
         if not result.hand_landmarks:
             self._last_label = None
             self._stable_count = 0
+            
+        if self.show_preview and preview is not None:
+            # Show voted result at top of frame
+            voted_label, voted_conf = majority_vote(self._vote_window)
+            if voted_label is not None:
+                voted_text = f"VOTED: {voted_label} ({voted_conf:.2f})"
+                cv2.putText(preview, voted_text, (10, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.1,
+                        (0, 0, 0), 4)
+                cv2.putText(preview, voted_text, (10, 35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.1,
+                        (255, 220, 0), 2)
+
+            num_hands_text = f"Hands: {len(self._latest_hands)}"
+            cv2.putText(preview, num_hands_text, (10, 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+                    (200, 200, 200), 2)
+
+            cv2.imshow("Gesture Recognition Preview", preview)
+            # waitKey(1) is required to actually render the window — does not block
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                self.get_logger().info("Preview window closed by user")
+                self.show_preview = False
+                cv2.destroyAllWindows()
+
 
     # Publish
     def _publish_voted_result(self):
@@ -384,6 +458,8 @@ class HandGestureRecognitionNode(Node):
             self._landmarker.close()
         except Exception:
             pass
+        if self.show_preview:
+            cv2.destroyAllWindows()
         super().destroy_node()
 
 def main(args=None):

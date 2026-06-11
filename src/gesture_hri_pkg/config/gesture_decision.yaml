@@ -2,7 +2,7 @@ gesture_decision:
   ros__parameters:
     mode: "robot"
     debounce_frames: 2
-    cooldown_sec: 3.5
+    cooldown_sec: 1.5
     idle_timeout_sec: 2.0
     publish_every_frame: false
     min_confidence: 0.60

@@ -24,6 +24,7 @@ def _build_nodes(context, *args, **kwargs):
    mode        = LaunchConfiguration("mode").perform(context)
    image_topic = LaunchConfiguration("image_topic").perform(context)
    pkg         = LaunchConfiguration("pkg").perform(context)
+   show_preview = LaunchConfiguration("show_preview").perform(context)
  
    config_dir = PathJoinSubstitution([
        FindPackageShare("gesture_hri_pkg"),
@@ -43,7 +44,8 @@ def _build_nodes(context, *args, **kwargs):
        output="screen",
        parameters=[perception_yaml,
            {
-               "image_topic": image_topic  # override only the runtime topic
+               "image_topic": image_topic,
+               "show_preview": (show_preview.lower() == "true"),               
            }
        ],
    )
@@ -105,6 +107,10 @@ def generate_launch_description():
        ),
        DeclareLaunchArgument(
            "pkg",
+           default_value="gesture_hri_pkg"
+       ),
+       DeclareLaunchArgument(
+           "show_preview",
            default_value="gesture_hri_pkg"
        ),
    ]
