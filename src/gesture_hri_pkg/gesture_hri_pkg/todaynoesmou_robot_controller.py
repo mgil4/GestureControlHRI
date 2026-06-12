@@ -99,10 +99,6 @@ class RobotControllerNode(Node):
             if self._mode == "llm":
                 self._setup_llm_mode()
 
-        # Ensure _llm_timeout_timer always exists so destroy_node is safe
-        # regardless of which mode is active.
-        self._llm_timeout_timer = None
-
         self.get_logger().info(
             f"Robot Controller ready mode={self._mode}\n"
             + self._mode_summary()
@@ -235,12 +231,7 @@ class RobotControllerNode(Node):
         elif mode == "llm" and action == "LLM_QUERY":
             text = data.get("text", "").strip()
             if text:
-                # Run in a thread so create_timer() inside _handle_llm_query
-                # is always called from the same thread context, and so that
-                # a stray llm action in robot mode doesn't crash the executor.
-                threading.Thread(
-                    target=self._handle_llm_query, args=(text,), daemon=True
-                ).start()
+                self._handle_llm_query(text)
 
     # MODE 1: Robot action handlers
     def _handle_robot_action(self, action: str, data: dict):

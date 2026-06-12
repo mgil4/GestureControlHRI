@@ -21,7 +21,6 @@ pip install ollama
 """
 
 import json
-import re
 import threading
 import time
 
@@ -34,7 +33,7 @@ from std_msgs.msg import String
 # be read aloud verbatim by the TTS engine.
 _DEFAULT_SYSTEM_PROMPT = (
    "You are TIAGo, a friendly and helpful mobile robot that gives conversation. "
-   "You will receive as input the acronym of an airport or city."
+   "You will receive as input the acronym of an airport (3-letter IATA code)."
    "You should answer giving a list of things to visit at the city where it belongs, don't wait for an answer nor offer more help."
    "Avoid markdown formatting and emojis, respond in plain spoken English only, "
    "since your response will be read aloud by a text-to-speech engine."
@@ -124,8 +123,6 @@ class LLMClientNode(Node):
                     f"\n                                                         "
                     f"[LLM] RESPONSE ({elapsed:.1f}s): '{response_text}'"
                 )
-                if not response_text:
-                    raise RuntimeError("Model returned empty response even after retry.")
                 self._publish_response(response_text)
                 self._publish_status("ready", f"Done in {elapsed:.1f}s")
 
@@ -142,16 +139,6 @@ class LLMClientNode(Node):
             {"role": "user",   "content": query},
         ]
 
-    @staticmethod
-    def _strip_think_blocks(text: str) -> str:
-        """
-        Qwen3 sometimes wraps its entire output in <think>...</think> and
-        produces no visible content outside, leaving an empty string.
-        Remove all think blocks before returning.
-        """
-        cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-        return cleaned.strip()
-
     def _call_ollama(self, messages: list[dict]) -> str:
         try:
             import ollama
@@ -159,36 +146,15 @@ class LLMClientNode(Node):
             raise RuntimeError("ollama package not installed. Run: pip install ollama")
 
         client = ollama.Client(host=self._ollama_host)
-
-        def _chat(msgs):
-            resp = client.chat(
-                model=self._ollama_model,
-                messages=msgs,
-                options={
-                    "temperature": self._temperature,
-                    "num_predict": self._max_tokens,
-                },
-            )
-            return self._strip_think_blocks(resp["message"]["content"])
-
-        result = _chat(messages)
-
-        # If the model returned nothing (think-only output or truncated
-        # generation), retry once with /no_think appended to the user turn
-        # to explicitly suppress chain-of-thought on the retry.
-        if not result:
-            self.get_logger().warn(
-                "[LLM] Empty response from model — retrying with /no_think hint"
-            )
-            retry_messages = list(messages)
-            retry_messages[-1] = {
-                "role":    "user",
-                "content": retry_messages[-1]["content"] + " /no_think",
-            }
-            result = _chat(retry_messages)
-
-        return result
-
+        resp   = client.chat(
+            model=self._ollama_model,
+            messages=messages,
+            options={
+                "temperature": self._temperature,
+                "num_predict": self._max_tokens,
+            },
+        )
+        return resp["message"]["content"].strip()
 
     def _publish_response(self, text: str):
         msg      = String()

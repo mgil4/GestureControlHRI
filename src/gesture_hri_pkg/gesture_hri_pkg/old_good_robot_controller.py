@@ -28,6 +28,7 @@ All three modes share the same TTS backend code.
 """
 
 import json
+import math
 import threading
 import time
 
@@ -99,10 +100,6 @@ class RobotControllerNode(Node):
             if self._mode == "llm":
                 self._setup_llm_mode()
 
-        # Ensure _llm_timeout_timer always exists so destroy_node is safe
-        # regardless of which mode is active.
-        self._llm_timeout_timer = None
-
         self.get_logger().info(
             f"Robot Controller ready mode={self._mode}\n"
             + self._mode_summary()
@@ -117,15 +114,11 @@ class RobotControllerNode(Node):
         self.declare_parameter("cmd_vel_duration",     1.5)
         self.declare_parameter("cmd_vel_rate_hz",      10.0)
         self.declare_parameter("head_pan_default",     0.0)
-        # BUG FIX: sign convention in declare_parameter now matches robot_controller.yaml.
-        # YAML sets head_tilt_up=0.4 and head_tilt_down=-0.4 (TIAGo joint convention).
-        # The old code defaults (-0.4 / 0.4) were opposite, causing LOOK_UP to tilt down
-        # and vice versa when the YAML was NOT loaded.  Now both sources agree.
-        self.declare_parameter("head_tilt_up",         0.4)
-        self.declare_parameter("head_tilt_down",      -0.4)
+        self.declare_parameter("head_tilt_up",        -0.4)
+        self.declare_parameter("head_tilt_down",       0.4)
         self.declare_parameter("head_move_duration",   1.0)
         self.declare_parameter("tts_backend",          "auto")
-        self.declare_parameter("llm_response_timeout", 30.0)
+        self.declare_parameter("llm_response_timeout", 15.0)
 
     def _read_params(self):
         self._mode               = self.get_parameter("mode").value
@@ -156,55 +149,65 @@ class RobotControllerNode(Node):
 
     # MODE 1  –  Robot setup
     def _setup_robot_mode(self):
-        self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
-        self._head_pub    = self.create_publisher(
+        # cmd_vel publisher (base movement)
+        self._cmd_vel_pub = self.create_publisher(
+            Twist, "/cmd_vel", 10
+        )
+        # head trajectory publisher
+        self._head_pub = self.create_publisher(
             JointTrajectory, "/head_controller/joint_trajectory", 10
         )
+        # play_motion2 action client
         if _HAS_PLAY_MOTION:
-            self._play_motion_client = ActionClient(self, PlayMotion2, "/play_motion2")
+            self._play_motion_client = ActionClient(
+                self, PlayMotion2, "/play_motion2"
+            )
         else:
             self._play_motion_client = None
             self.get_logger().warn(
                 "play_motion2_msgs not installed: predefined motions (wave, home) disabled"
             )
-        self._motion_lock   = threading.Lock()
-        self._twist_cancel  = threading.Event()
+        # Thread lock so concurrent cmd_vel bursts don't overlap
+        self._motion_lock = threading.Lock()
+        self._twist_cancel = threading.Event()
 
     # MODE 2A / 2B: Text / LLM setup
     def _setup_text_mode(self):
         self._active_tts = self._resolve_tts_backend()
         self.get_logger().info(f"[TTS] Backend resolved: {self._active_tts}")
 
+        # PAL TTS action client
         if _HAS_PAL_TTS and self._active_tts == "pal":
             self._say_client = ActionClient(self, TTSAction, "/tts_engine/tts")
             self.get_logger().info("[TTS] PAL action client created -> /tts_engine/tts")
         else:
             self._say_client = None
-            self.get_logger().error(
-                "[TTS] PAL TTS unavailable. Install tts_msgs or check your ROS environment."
-            )
+            self.get_logger().error("[TTS] PAL TTS unavailable. Install tts_msgs or check your ROS environment.")
 
     def _setup_llm_mode(self):
-        self._llm_query_pub = self.create_publisher(String, "/llm/query", 10)
+        # Publisher to send text to llm_client.py
+        self._llm_query_pub = self.create_publisher(
+            String, "/llm/query", 10
+        )
+        # Subscriber to receive LLM response from llm_client.py
         self._llm_response_sub = self.create_subscription(
             String, "/llm/response", self._llm_response_callback, 10
         )
-        # _llm_response stores the latest reply so the timeout callback can check it.
-        self._llm_response: str = ""
-        # One-shot timer reference; None when no query is in flight.
-        self._llm_timeout_timer = None
+        self._llm_event    = threading.Event()
+        self._llm_response = ""
 
     def _resolve_tts_backend(self) -> str:
+        """Decide which TTS backend to use based on parameter and availability."""
         if self._tts_backend == "pal":
             if _HAS_PAL_TTS:
                 return "pal"
-            self.get_logger().warn(
-                "tts_backend=pal but tts_msgs not installed: falling back to gtts"
-            )
+            self.get_logger().warn("tts_backend=pal but communication_skills not installed: falling back to gtts")
             return "gtts"
         if self._tts_backend == "gtts":
             return "gtts"
+        # auto: prefer PAL if available
         return "pal" if _HAS_PAL_TTS else "gtts"
+
 
     # Main callback
     def _action_callback(self, msg: String):
@@ -215,9 +218,9 @@ class RobotControllerNode(Node):
             self.get_logger().error(f"Bad JSON on /gesture/action: {e}")
             return
 
-        action     = data.get("action", "IDLE")
-        mode       = data.get("mode",   self._mode)
-        confidence = data.get("confidence", 0.0)
+        action    = data.get("action", "IDLE")
+        mode      = data.get("mode",   self._mode)
+        confidence= data.get("confidence", 0.0)
 
         self.get_logger().debug(
             f"Received action={action}  mode={mode}  conf={confidence:.2f}"
@@ -235,12 +238,11 @@ class RobotControllerNode(Node):
         elif mode == "llm" and action == "LLM_QUERY":
             text = data.get("text", "").strip()
             if text:
-                # Run in a thread so create_timer() inside _handle_llm_query
-                # is always called from the same thread context, and so that
-                # a stray llm action in robot mode doesn't crash the executor.
+                #self.get_logger().info(f"[LLM] Query: '{text}'")
                 threading.Thread(
                     target=self._handle_llm_query, args=(text,), daemon=True
                 ).start()
+
 
     # MODE 1: Robot action handlers
     def _handle_robot_action(self, action: str, data: dict):
@@ -248,26 +250,25 @@ class RobotControllerNode(Node):
             self.get_logger().warn(f"Unknown robot action: '{action}'")
             return
 
-        spec        = _ROBOT_ACTION_TABLE[action]
-        twist_scale = spec.get("twist")
-        motion_name = spec.get("motion")
-        head_cmd    = spec.get("head")
+        spec = _ROBOT_ACTION_TABLE[action]
+        twist_scale = spec.get("twist")   
+        motion_name = spec.get("motion")   
+        head_cmd    = spec.get("head")     
         is_fast     = spec.get("fast",  False)
         is_spin     = spec.get("spin",  False)
 
-        self.get_logger().info(
-            f"\n                                                  "
-            f"[ROBOT] Executing action:      {action}\n"
-        )
+        self.get_logger().info(f"\n                                                  [ROBOT] Executing action:      {action}\n")
 
+        # Immediate zero velocity for STOP / EMERGENCY
         if twist_scale == (0.0, 0.0, 0.0):
             self._publish_stop()
 
+        # Twist burst (runs in background thread)
         if twist_scale is not None and twist_scale != (0.0, 0.0, 0.0):
             self._twist_cancel.set()
             lx, ly, az = twist_scale
-            lin      = self._linear_speed  * (self._fast_multiplier if is_fast else 1.0)
-            ang      = self._angular_speed * (self._fast_multiplier if is_fast else 1.0)
+            lin = self._linear_speed  * (self._fast_multiplier if is_fast else 1.0)
+            ang = self._angular_speed * (self._fast_multiplier if is_fast else 1.0)
             duration = self._cmd_vel_duration * (2.0 if is_spin else 1.0)
             threading.Thread(
                 target=self._publish_twist_burst,
@@ -275,21 +276,29 @@ class RobotControllerNode(Node):
                 daemon=True,
             ).start()
 
+        # Head movement
         if head_cmd is not None:
             tilt = self._head_tilt_up if head_cmd == "up" else self._head_tilt_down
             self._publish_head_goal(pan=self._head_pan_default, tilt=tilt)
 
+        # play_motion2 predefined motion
         if motion_name is not None:
             self._send_play_motion(motion_name)
 
     def _publish_stop(self):
+        """Immediately publishes zero velocity to stop the base."""
         self._cmd_vel_pub.publish(Twist())
         self.get_logger().info("[ROBOT] Base stopped")
 
     def _publish_twist_burst(self, lx: float, ly: float, az: float, duration: float):
+        """
+        Publishes a Twist at cmd_vel_rate_hz for `duration` seconds,
+        then sends a zero-velocity stop.
+        Runs in its own thread so it does not block the ROS executor.
+        """
         with self._motion_lock:
             self._twist_cancel.clear()
-            twist           = Twist()
+            twist = Twist()
             twist.linear.x  = lx
             twist.linear.y  = ly
             twist.angular.z = az
@@ -306,13 +315,15 @@ class RobotControllerNode(Node):
             self._publish_stop()
 
     def _publish_head_goal(self, pan: float, tilt: float):
-        traj             = JointTrajectory()
+        """Sends a single-waypoint JointTrajectory to the head controller."""
+        traj = JointTrajectory()
         traj.joint_names = ["head_1_joint", "head_2_joint"]
 
-        point            = JointTrajectoryPoint()
+        point = JointTrajectoryPoint()
         point.positions  = [pan, tilt]
         point.velocities = [0.0, 0.0]
 
+        # Duration as builtin Duration message
         secs  = int(self._head_move_duration)
         nsecs = int((self._head_move_duration - secs) * 1e9)
         point.time_from_start = Duration(sec=secs, nanosec=nsecs)
@@ -322,6 +333,11 @@ class RobotControllerNode(Node):
         self.get_logger().info(f"[ROBOT] Head: pan={pan:.2f} tilt={tilt:.2f}")
 
     def _send_play_motion(self, motion_name: str):
+        """
+        Sends a play_motion2 goal asynchronously.
+        Fires-and-forgets: does not wait for completion so the node
+        remains responsive to new gesture commands.
+        """
         if not _HAS_PLAY_MOTION or self._play_motion_client is None:
             self.get_logger().warn(
                 f"play_motion2 unavailable: cannot execute motion '{motion_name}'"
@@ -334,11 +350,12 @@ class RobotControllerNode(Node):
             )
             return
 
-        goal               = PlayMotion2.Goal()
+        goal = PlayMotion2.Goal()
         goal.motion_name   = motion_name
-        goal.skip_planning = False
+        goal.skip_planning = False   # use MoveIt planning
 
         self.get_logger().info(f"[ROBOT] play_motion2: '{motion_name}'")
+        # Fire and forget: result callback only logs outcome
         self._play_motion_client.send_goal_async(
             goal,
             feedback_callback=lambda fb: None,
@@ -356,43 +373,30 @@ class RobotControllerNode(Node):
                 )
             )
         except Exception as e:
-            self.get_logger().error(f"[ROBOT] play_motion2 '{motion_name}' error: {e}")
+            self.get_logger().error(
+                f"[ROBOT] play_motion2 '{motion_name}' error: {e}"
+            )
+
 
     # TTS (shared by mode 2A and 2B)
     def _speak(self, text: str):
         if self._active_tts == "pal":
             self._speak_pal(text)
         else:
-            self.get_logger().error("[TTS] No TTS available: active_tts is not 'pal'")
+            self.get_logger().error( "[TTS] No TTS available: active_tts is not 'pal'" ) 
 
     def _speak_pal(self, text: str):
-        """
-        Send text to the PAL TTS action server (/tts_engine/tts).
-
-        BUG FIX: the original implementation called spin_until_future_complete()
-        from a background thread.  rclpy's single-threaded executor does not
-        support being driven from two threads simultaneously, so the TTS goal
-        future would silently never complete, leaving the node in a hung state.
-
-        Fix: the call is now fully callback-driven.  _speak_pal() returns
-        immediately after send_goal_async(); the result arrives via
-        _tts_goal_accepted_callback → _tts_result_callback, both executed
-        on the main executor thread with no risk of deadlock.
-
-        NOTE: because _speak_pal now returns before speech finishes, callers
-        that need to sequence actions after TTS should use the result callback
-        rather than relying on _speak() blocking.
-        """
+        """Send text to the PAL TTS action server (/tts_engine/tts)."""
         if self._say_client is None or not _HAS_PAL_TTS:
             self.get_logger().error(
-                "[TTS] PAL client not initialised — tts_msgs not installed or "
-                "_setup_text_mode was not called"
+            "[TTS] PAL client not initialised — tts_msgs not installed or "
+            "_setup_text_mode was not called"
             )
             return
 
         if not self._say_client.wait_for_server(timeout_sec=3.0):
             self.get_logger().error(
-                "[TTS] /tts_engine/tts action server not available after 3s"
+            "[TTS] /tts_engine/tts action server not available after 3s"
             )
             return
 
@@ -400,119 +404,49 @@ class RobotControllerNode(Node):
         goal.input  = text
         goal.locale = "en_US"
 
-        self.get_logger().info(f"[TTS/PAL] Sending goal: '{text}'")
-        send_future = self._say_client.send_goal_async(goal)
-        send_future.add_done_callback(self._tts_goal_accepted_callback)
-        # Returns immediately; speech continues via callbacks on the executor thread.
-
-    def _tts_goal_accepted_callback(self, future):
-        """Called by the executor when the TTS server accepts or rejects the goal."""
+        future = self._say_client.send_goal_async(goal)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=30.0)
         try:
-            goal_handle = future.result()
+            handle        = future.result()
+            result_future = handle.get_result_async()
+            rclpy.spin_until_future_complete(self, result_future, timeout_sec=30.0)
+            self.get_logger().info("[TTS/PAL] speech completed")
         except Exception as e:
-            self.get_logger().error(f"[TTS/PAL] Goal send failed: {e}")
-            return
+            self.get_logger().error(f"[TTS/PAL] error: {e}")
 
-        if not goal_handle.accepted:
-            self.get_logger().error("[TTS/PAL] Goal rejected by server")
-            return
-
-        self.get_logger().info("[TTS/PAL] Goal accepted, waiting for result...")
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self._tts_result_callback)
-
-    def _tts_result_callback(self, future):
-        """Called by the executor when TTS finishes speaking."""
-        try:
-            future.result()
-            self.get_logger().info("[TTS/PAL] Speech completed")
-        except Exception as e:
-            self.get_logger().error(f"[TTS/PAL] Result error: {e}")
-
-    # MODE 2B: LLM
+    # MODE 2B: LLM 
     def _handle_llm_query(self, text: str):
         """
-        Publishes the user's sentence to /llm/query and arms a timeout timer.
-        The response arrives asynchronously via _llm_response_callback.
-
-        BUG FIX: the original implementation used threading.Event.wait() to
-        block a background thread until the LLM response arrived, then called
-        spin_until_future_complete() inside _speak_pal() from that same thread.
-        This caused a deadlock because spin_until_future_complete() tries to
-        drive the executor from a non-executor thread while the real executor
-        is already spinning — TTS goal callbacks never fired.
-
-        Fix: _handle_llm_query() now returns immediately after publishing the
-        query.  The response callback (_llm_response_callback) is called on
-        the executor thread and directly calls _speak() in a short-lived
-        daemon thread (only to avoid blocking the executor during
-        wait_for_server).  A ROS timer replaces the threading.Event timeout.
+        Publishes the user's sentence to /llm/query, waits for a response
+        on /llm/response (from llm_client.py), then speaks the answer.
         """
+        self._llm_event.clear()
         self._llm_response = ""
 
-        # Cancel any previously armed timeout from a prior query.
-        if self._llm_timeout_timer is not None:
-            self._llm_timeout_timer.cancel()
-            self._llm_timeout_timer = None
-
+        # Send query
         msg      = String()
         msg.data = text
         self._llm_query_pub.publish(msg)
-        self.get_logger().info(f"[LLM] Query published: '{text}'")
+        #self.get_logger().info(f"[LLM] Query published: '{text}'")
 
-        # Arm a one-shot timeout timer on the ROS executor — safe from any thread.
-        self._llm_timeout_timer = self.create_timer(
-            self._llm_timeout, self._llm_timeout_callback
-        )
+        # Wait for response (with timeout)
+        got_response = self._llm_event.wait(timeout=self._llm_timeout)
 
-    def _llm_timeout_callback(self):
-        """Fires on the executor thread if no LLM response arrives in time."""
-        if self._llm_timeout_timer is not None:
-            self._llm_timeout_timer.cancel()
-            self._llm_timeout_timer = None
-
-        if not self._llm_response:
+        if not got_response or not self._llm_response:
             self.get_logger().warn(
                 f"[LLM] No response received within {self._llm_timeout}s"
             )
-            threading.Thread(
-                target=self._speak,
-                args=("I did not receive a response. Please try again.",),
-                daemon=True,
-            ).start()
-
-    def _llm_response_callback(self, msg: String):
-        """
-        Receives the LLM reply from llm_client.py on the executor thread.
-        Cancels the timeout timer and speaks the response.
-
-        If the response is empty (model produced nothing even after retry),
-        cancel the timer immediately and speak the fallback rather than
-        silently returning and leaving the 30s timeout ticking.
-        """
-        response = msg.data.strip()
-
-        # Always cancel the timer as soon as any message arrives.
-        if self._llm_timeout_timer is not None:
-            self._llm_timeout_timer.cancel()
-            self._llm_timeout_timer = None
-
-        if not response:
-            self.get_logger().warn("[LLM] Received empty response from llm_client")
-            threading.Thread(
-                target=self._speak,
-                args=("I am sorry, I could not generate a response. Please try again.",),
-                daemon=True,
-            ).start()
+            self._speak("I did not receive a response. Please try again.")
             return
 
-        self._llm_response = response  # mark as answered
+        #self.get_logger().info(f"[LLM] Response: '{self._llm_response}'")
+        self._speak(self._llm_response)
 
-        self.get_logger().info(f"[LLM] Response received, speaking...")
-        # Short-lived daemon thread: avoids blocking the executor during
-        # wait_for_server inside _speak_pal, while _speak_pal itself is now
-        # fully async so no further blocking occurs after that call returns.
-        threading.Thread(target=self._speak, args=(response,), daemon=True).start()
+    def _llm_response_callback(self, msg: String):
+        """Receives the LLM reply from llm_client.py."""
+        self._llm_response = msg.data.strip()
+        self._llm_event.set()
+
 
     # Cleanup
     def destroy_node(self):
@@ -520,11 +454,6 @@ class RobotControllerNode(Node):
         if self._mode == "robot":
             try:
                 self._publish_stop()
-            except Exception:
-                pass
-        if self._llm_timeout_timer is not None:
-            try:
-                self._llm_timeout_timer.cancel()
             except Exception:
                 pass
         super().destroy_node()
